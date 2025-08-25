@@ -1,0 +1,32 @@
+// Generic SISO shift register
+module shift_reg_siso #(
+  parameter integer WIDTH = 4,
+  parameter [WIDTH-1:0] RESET_VALUE = {WIDTH{1'b0}}
+)(
+  input  wire                 clk,
+  input  wire                 reset_n,   // async active-low
+  input  wire                 en,        // shift enable
+  input  wire                 dir,       // 0 = left, 1 = right
+  input  wire                 sdi,       // serial data in
+  output wire                 sdo        // serial data out
+);
+
+  reg [WIDTH-1:0] siso;
+
+  // pick which bit goes out based on direction
+  assign sdo = dir ? siso[0] : siso[WIDTH-1];
+
+  always @(posedge clk or negedge reset_n) begin
+    if (!reset_n) begin
+      siso <= RESET_VALUE;
+    end else if (en) begin
+      if (!dir) begin
+        // shift left, bring sdi into LSB
+        siso <= {siso[WIDTH-2:0], sdi};
+      end else begin
+        // shift right, bring sdi into MSB
+        siso <= {sdi, siso[WIDTH-1:1]};
+      end
+    end
+  end
+endmodule
