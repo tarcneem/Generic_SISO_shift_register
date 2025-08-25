@@ -1,0 +1,138 @@
+`timescale 1us/1ns
+module tb_shift_reg_siso;
+
+  // ====== Configure width here ======
+  localparam integer WIDTH = 8;
+
+  // DUT I/O
+  reg                  clk = 0;
+  reg                  reset_n;
+  reg                  en;
+  reg                  dir;   // 0 = left, 1 = right
+  reg                  sdi;
+  wire                 sdo;
+
+  // Instantiate DUT
+  shift_reg_siso #(.WIDTH(WIDTH)) DUT (
+    .clk     (clk),
+    .reset_n (reset_n),
+    .en      (en),
+    .dir     (dir),
+    .sdi     (sdi),
+    .sdo     (sdo)
+  );
+
+  // 1 MHz clock
+  always #0.5 clk = ~clk;
+
+  // ---------- Golden reference (scoreboard model) ----------
+  reg [WIDTH-1:0] golden;
+
+  // Update golden exactly like the DUT (at posedge)
+  always @(posedge clk or negedge reset_n) begin
+    if (!reset_n)
+      golden <= {WIDTH{1'b0}};
+    else if (en) begin
+      if (!dir)        // left
+        golden <= {golden[WIDTH-2:0], sdi};
+      else             // right
+        golden <= {sdi, golden[WIDTH-1:1]};
+    end
+  end
+
+  // Compare DUT vs golden after every posedge
+  always @(posedge clk) if (reset_n) begin
+    // Compare internal shift register (optional but helpful)
+    if (DUT.siso !== golden)
+      $display("[%0t] ERROR: REG mismatch  DUT=%b  GOLDEN=%b",
+               $time, DUT.siso, golden);
+
+    // Compare serial-out bit based on direction
+    if (sdo !== (dir ? golden[0] : golden[WIDTH-1]))
+      $display("[%0t] ERROR: SDO mismatch  sdo=%b expected=%b",
+               $time, sdo, (dir ? golden[0] : golden[WIDTH-1]));
+  end
+
+  // ---------- Helpers ----------
+  // Drive one serial bit, sampled next posedge
+  task automatic push_bit(input reg bit_val);
+    begin
+      @(negedge clk);
+      sdi = bit_val;
+      en  = 1'b1;
+    end
+  endtask
+
+  // Idle for N clocks with en=0
+  task automatic idle_cycles(input integer n);
+    integer k;
+    begin
+      @(negedge clk) en = 1'b0; // stop shifting
+      for (k = 0; k < n; k = k + 1) @(posedge clk);
+    end
+  endtask
+
+  // ---------- Stimulus ----------
+  integer i;
+  reg [15:0] pattern;  // we’ll use 16 bits of stimulus regardless of WIDTH
+
+  initial begin
+    // Waves (optional)
+    $dumpfile("wave.vcd");
+    $dumpvars(0, tb_shift_reg_siso);
+
+    // Defaults
+    reset_n = 0;
+    en      = 0;
+    dir     = 0;    // start with left
+    sdi     = 0;
+
+    // Reset for two clocks
+    repeat (2) @(posedge clk);
+    reset_n = 1;
+
+    // -------- Test 1: LEFT shift a deterministic pattern --------
+    // Pattern: 16'b 1 0 1 1  0 0 1 0  1 0 0 1  1 1 0 0  (MSB first when pushing)
+    pattern = 16'b10110010_10011100;
+
+    // Push the upper 8 bits (change count if you want)
+    for (i = 15; i >= 8; i = i - 1) begin
+      dir = 1'b0;              // left
+      push_bit(pattern[i]);
+      @(posedge clk);          // allow one shift per bit
+    end
+
+    // Let it ripple for a few idle cycles
+    idle_cycles(3);
+
+    // -------- Test 2: RIGHT shift another deterministic pattern --------
+    // Now push the lower 8 bits while shifting right
+    for (i = 7; i >= 0; i = i - 1) begin
+      dir = 1'b1;              // right
+      push_bit(pattern[i]);
+      @(posedge clk);
+    end
+
+    // Drain
+    idle_cycles(4);
+
+    // -------- Test 3: Quick random burst in both directions --------
+    // (repeatable randomness — comment out $urandom_range seed for variability)
+    for (i = 0; i < 12; i = i + 1) begin
+      dir = $urandom_range(0,1);
+      push_bit($urandom_range(0,1));
+      @(posedge clk);
+    end
+
+    idle_cycles(6);
+
+    $display("TEST DONE");
+    #2 $finish;
+  end
+
+  // (Optional) Console trace
+  initial
+    $monitor("[%0t] rst=%b en=%b dir=%b sdi=%b | DUT=%b sdo=%b | GOLDEN=%b",
+             $time, reset_n, en, dir, sdi, DUT.siso, sdo, golden);
+
+endmodule
